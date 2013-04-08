@@ -150,7 +150,21 @@ switch ($argv[1]) {
             exit;
         }
         echo "copy dropbox:/". DROPBOX_ROOT . $argv[2] . " to dropbox:/". DROPBOX_ROOT . $argv[3] . "\n";
-        $cp = $dropbox->copy(DROPBOX_ROOT . $argv[2], DROPBOX_ROOT . $argv[3]);
+        $cp = $dropbox->copy(DROPBOX_ROOT ."/". $argv[2], DROPBOX_ROOT ."/". $argv[3]);
+        //var_dump($cp);
+        break;
+
+    case "copyref":
+        if (!isset($argv[2])) {
+            echo "Missing FROM ref!\n";
+            exit;
+        }
+        if (!isset($argv[3])) {
+            echo "Missing TO filename!\n";
+            exit;
+        }
+        echo "copy dropbox:~". $argv[2] . " to dropbox:/". DROPBOX_ROOT . $argv[3] . "\n";
+        $cp = $dropbox->copy(null, DROPBOX_ROOT ."/". $argv[3], $argv[2]);
         //var_dump($cp);
         break;
 
@@ -160,6 +174,15 @@ switch ($argv[1]) {
             exit;
         }
         $info = $dropbox->shares(DROPBOX_ROOT ."/". $argv[2]);
+        print_r($info["body"]);
+        break;
+
+    case "getref":
+        if (!isset($argv[2])) {
+            echo "Missing the file or folder!\n";
+            exit;
+        }
+        $info = $dropbox->copyRef(DROPBOX_ROOT ."/". $argv[2]);
         print_r($info["body"]);
         break;
 
@@ -206,6 +229,9 @@ Usage:  dropbox ls
         dropbox put filename
         dropbox del filename
         dropbox cp  from_file to_file
+        dropbox share filename
+        dropbox getref filename
+        dropbox copyref from_ref to_file
 
 HELP;
 }
