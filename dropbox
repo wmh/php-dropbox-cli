@@ -5,31 +5,53 @@ if (empty($home)) {
     die("The 'HOME' environment variable is required.");
 }
 error_reporting(E_ALL);
-define("BASE_PATH",     dirname(__FILE__));
 define("CURRENT_PATH",  getcwd());
 
-// Register a simple autoload function
-spl_autoload_register(function($class){
-        $class = str_replace('\\', '/', $class);
-        require_once(dirname(__FILE__) . "/Dropbox/" . $class . '.php');
-});
+require_once __DIR__ .'/vendor/autoload.php';
+use Kunnu\Dropbox\Dropbox;
+use Kunnu\Dropbox\DropboxApp;
+use Kunnu\Dropbox\DropboxFile;
 
-// Set your consumer key, secret and callback URL
-//$root                 = '';
-//$key                  = '';
-//$secret               = '';
-//$oauth_token          = '';
-//$oauth_token_secret   = '';
-//$access_type          = '';
-require $home . "/.dropbox.tok.php";
-require dirname(__FILE__) . "/MyAccessToken.php";
+$config_file = join('/', [$home, '.config', 'php-dropbox-cli', 'auth.json']);
+$config = [];
+if (file_exists($config_file)) {
+    $config = json_decode(file_get_contents($config_file), true);
+}
+if (!isset($config['client_id']) || !isset($config['client_secret']) || !isset($config['access_token'])) {
+    $client_id = readline('Enter the client_id here: ');
+    $client_secret = readline('Enter the client_secret here: ');
+    if ($client_id == '' || $client_secret == '') {
+        return;
+    }
+    $app = new DropboxApp($client_id, $client_secret);
+    $dropbox = new Dropbox($app);
+    $authHelper = $dropbox->getAuthHelper();
+    $authUrl = $authHelper->getAuthUrl();
+    echo "-----\n";
+    echo '1. Go to ', $authUrl, "\n";
+    echo '2. Click "Allow" (you might have to log in first).', "\n";
+    echo '3. Copy the authorization code.', "\n";
+    $code = readline('Enter the authorization code here: ');
+    if ($code == '') {
+        return;
+    }
+    $accessToken = $authHelper->getAccessToken($code);
+    $access_token = $accessToken->getToken();
+    $config = [
+        'client_id' => $client_id,
+        'client_secret' => $client_secret,
+        'access_token' => $access_token,
+    ];
+    mkdir(dirname($config_file), 0755, true);
+    file_put_contents($config_file, json_encode($config));
+}
 
-$storage = new \MyAccessToken($oauth_token, $oauth_token_secret);
-$OAuth = new \Dropbox\OAuth\Consumer\Curl($key, $secret, $storage); //, $callback);
-$dropbox = new \Dropbox\API($OAuth, $access_type);
-
-// examples
-//$accountInfo = $dropbox->accountInfo();
+$client_id = $config['client_id'];
+$client_secret = $config['client_secret'];
+$access_token = $config['access_token'];
+$root = '/Tmp';
+$app = new DropboxApp($client_id, $client_secret, $access_token);
+$dropbox = new Dropbox($app);
 
 // my app start
 if (!isset($argv[1])) {
@@ -62,37 +84,29 @@ switch ($argv[1]) {
                 $filter = '/'. $filter .'/';
             }
         }
-        $data = $dropbox->metaData(DROPBOX_ROOT . $subpath);
-        if (isset($data["body"]) && !isset($data["body"]->contents)) {
-            print_r($data["body"]);
-            break;
+        try {
+            $listFolderContents = $dropbox->listFolder(DROPBOX_ROOT . $subpath);
+        } catch (\Kunnu\Dropbox\Exceptions\DropboxClientException $e) {
+            $json = json_decode($e->getMessage(), true);
+            echo $json['error_summary'], "\n\n";
+            exit;
         }
-        foreach ($data["body"]->contents as $entry) {
-/*
-            [revision] => 1
-            [thumb_exists] =>
-            [bytes] => 51553
-            [modified] => Tue, 06 Sep 2011 07:48:49 +0000
-            [path] => /Tmp/dropbox.shell.tar.bz2
-            [is_dir] =>
-            [icon] => page_white_compressed
-            [mime_type] => application/octet-stream
-            [size] => 50.3KB
-*/
+        $items = $listFolderContents->getItems();
+        foreach ($items->all() as $entry) {
             if ($filter) {
-                $filename = basename($entry->path);
+                $filename = basename($entry->path_display);
                 if (!preg_match($filter, $filename)) {
                     continue;
                 }
             }
 
-            echo date("Y-m-d H:i:s", strtotime($entry->modified));
-            if ($entry->is_dir) {
+            echo date("Y-m-d H:i:s", strtotime($entry->client_modified));
+            if (!property_exists($entry, 'size')) {
                 echo "    <DIR>         ";
             } else {
-                echo str_pad(number_format($entry->bytes), 18, " ", STR_PAD_LEFT);
+                echo str_pad(number_format($entry->size), 18, " ", STR_PAD_LEFT);
             }
-            echo " ", basename($entry->path), "\n";
+            echo " ", basename($entry->path_display), "\n";
         }
         break;
 
@@ -104,7 +118,10 @@ switch ($argv[1]) {
         $full_filename = $argv[2];
         $out_file = basename($argv[2]);
         echo "copy dropbox:/". DROPBOX_ROOT ."/". $full_filename ." to ". CURRENT_PATH ."/". $out_file, "\n";
-        $dropbox->getFile(DROPBOX_ROOT ."/". $full_filename, $out_file);
+
+        $file = $dropbox->download(DROPBOX_ROOT ."/". $full_filename);
+        $contents = $file->getContents();
+        file_put_contents($out_file, $contents);
         break;
 
     case "put":
@@ -125,8 +142,9 @@ switch ($argv[1]) {
             $path = "/";
         }
         echo "copy ". $full_filename ." to dropbox:/". DROPBOX_ROOT . $path . $basename. "\n";
-        $put = $dropbox->putFile($full_filename, $basename, DROPBOX_ROOT . $path);
-        //var_dump($put);
+
+        $dropboxFile = new DropboxFile($full_filename);
+        $put = $dropbox->upload($dropboxFile, DROPBOX_ROOT . $path . $basename, ['mode' => 'overwrite']);
         break;
 
     case "del":
@@ -135,9 +153,11 @@ switch ($argv[1]) {
             exit;
         }
         $full_filename = $argv[2];
+        if (substr($full_filename, 0, 1) != '/') {
+            $full_filename = '/'. $full_filename;
+        }
         echo "delete dropbox:/". DROPBOX_ROOT . $full_filename . "\n";
         $del = $dropbox->delete(DROPBOX_ROOT . $full_filename);
-        //var_dump($del);
         break;
 
     case "cp":
@@ -149,8 +169,15 @@ switch ($argv[1]) {
             echo "Missing TO filename!\n";
             exit;
         }
+        if (substr($argv[2], 0, 1) != '/') {
+            $argv[2] = '/'. $argv[2];
+        }
+        if (substr($argv[3], 0, 1) != '/') {
+            $argv[3] = '/'. $argv[3];
+        }
+        
         echo "copy dropbox:/". DROPBOX_ROOT . $argv[2] . " to dropbox:/". DROPBOX_ROOT . $argv[3] . "\n";
-        $cp = $dropbox->copy(DROPBOX_ROOT ."/". $argv[2], DROPBOX_ROOT ."/". $argv[3]);
+        $cp = $dropbox->copy(DROPBOX_ROOT . $argv[2], DROPBOX_ROOT . $argv[3]);
         //var_dump($cp);
         break;
 
@@ -163,18 +190,11 @@ switch ($argv[1]) {
             echo "Missing TO filename!\n";
             exit;
         }
-        echo "copy dropbox:~". $argv[2] . " to dropbox:/". DROPBOX_ROOT . $argv[3] . "\n";
-        $cp = $dropbox->copy(null, DROPBOX_ROOT ."/". $argv[3], $argv[2]);
-        //var_dump($cp);
-        break;
-
-    case "share":
-        if (!isset($argv[2])) {
-            echo "Missing the file or folder!\n";
-            exit;
+        if (substr($argv[3], 0, 1) != '/') {
+            $argv[3] = '/'. $argv[3];
         }
-        $info = $dropbox->shares(DROPBOX_ROOT ."/". $argv[2]);
-        print_r($info["body"]);
+        echo "copy dropbox:~". $argv[2] . " to dropbox:/". DROPBOX_ROOT . $argv[3] . "\n";
+        $cp = $dropbox->saveCopyReference(DROPBOX_ROOT . $argv[3], $argv[2]);
         break;
 
     case "getref":
@@ -182,13 +202,17 @@ switch ($argv[1]) {
             echo "Missing the file or folder!\n";
             exit;
         }
-        $info = $dropbox->copyRef(DROPBOX_ROOT ."/". $argv[2]);
-        print_r($info["body"]);
+        if (substr($argv[2], 0, 1) != '/') {
+            $argv[2] = '/'. $argv[2];
+        }
+        $copyReference = $dropbox->getCopyReference(DROPBOX_ROOT . $argv[2]);
+        $ref = $copyReference->getReference();
+        echo $ref, "\n";
         break;
 
-    case "info":
-        $info = $dropbox->accountInfo();
-        print_r($info);
+    case "account":
+        $account = $dropbox->getCurrentAccount();
+        print_r($account);
         break;
 
     default:
@@ -201,27 +225,6 @@ return;
  * functions below *
  *******************/
 
-function init_dropbox() {
-    include 'Dropbox/autoload.php';
-    $oauth = new Dropbox_OAuth_PEAR(APP_KEY, APP_SECRET);
-    $dropbox = new Dropbox_API($oauth);
-    $tokens = array(
-        "token" => TOKEN,
-        "token_secret" => TOKEN_SECRET,
-    );
-    $oauth->setToken($tokens);
-    return $dropbox;
-}
-function get_tokens() {
-    include 'Dropbox/autoload.php';
-    $oauth = new Dropbox_OAuth_PEAR(APP_KEY, APP_SECRET);
-    $dropbox = new Dropbox_API($oauth);
-    $tokens = $dropbox->getToken(EMAIL, PASSWORD);
-    echo "Save these tokens for re-use:";
-    print_r($tokens);
-    return;
-}
-
 function show_help() {
     echo <<<HELP
 Usage:  dropbox ls
@@ -229,7 +232,6 @@ Usage:  dropbox ls
         dropbox put filename
         dropbox del filename
         dropbox cp  from_file to_file
-        dropbox share filename
         dropbox getref filename
         dropbox copyref from_ref to_file
 
