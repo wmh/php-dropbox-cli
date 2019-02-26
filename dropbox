@@ -5,7 +5,7 @@ if (empty($home)) {
     die("The 'HOME' environment variable is required.");
 }
 error_reporting(E_ALL);
-define("CURRENT_PATH",  getcwd());
+define("CURRENT_PATH", getcwd());
 
 require_once __DIR__ .'/vendor/autoload.php';
 use Kunnu\Dropbox\Dropbox;
@@ -18,8 +18,8 @@ if (file_exists($config_file)) {
     $config = json_decode(file_get_contents($config_file), true);
 }
 if (!isset($config['client_id']) || !isset($config['client_secret']) || !isset($config['access_token'])) {
-    $client_id = readline('Enter the client_id here: ');
-    $client_secret = readline('Enter the client_secret here: ');
+    $client_id = readline('Enter the `App key` here: ');
+    $client_secret = readline('Enter the `App secret` here: ');
     if ($client_id == '' || $client_secret == '') {
         return;
     }
@@ -49,7 +49,7 @@ if (!isset($config['client_id']) || !isset($config['client_secret']) || !isset($
 $client_id = $config['client_id'];
 $client_secret = $config['client_secret'];
 $access_token = $config['access_token'];
-$root = '/Tmp';
+$root = '';
 $app = new DropboxApp($client_id, $client_secret, $access_token);
 $dropbox = new Dropbox($app);
 
@@ -59,15 +59,15 @@ if (!isset($argv[1])) {
     return;
 }
 
-define("DROPBOX_ROOT",  $root);
+define("DROPBOX_ROOT", $root);
 switch ($argv[1]) {
     case "ls":
         $subpath = "";
         $filter = "";
         if (isset($argv[2])) {
-            if (strpos($argv[2], "*") === FALSE) {
+            if (strpos($argv[2], "*") === false) {
                 $subpath = "/". $argv[2];
-            } else if ($argv[2] === '*.') {
+            } elseif ($argv[2] === '*.') {
                 $filter = '/^([^.]+)$/';
             } else {
                 $filter = $argv[2];
@@ -225,7 +225,8 @@ return;
  * functions below *
  *******************/
 
-function show_help() {
+function show_help()
+{
     echo <<<HELP
 Usage:  dropbox ls
         dropbox get filename
